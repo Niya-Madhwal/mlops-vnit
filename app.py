@@ -22,6 +22,6 @@ accuracy = accuracy_score(y_test, y_pred)
 from sklearn.tree import plot_tree
 import matplotlib.pyplot as plt 
 plt.figure(figsize = (12,8))
-plot.tree(clf, feature_names=iris.feature_names)
+plot_tree(clf, feature_names=iris.feature_names, class_names=iris.target_names, filled=True)
 plt.title("DC MLOPS")
 plt.show()
