@@ -1,0 +1,162 @@
+import os
+import cv2
+import pytesseract
+import sqlite3
+from fuzzywuzzy import process
+from flask import Flask, request, jsonify
+from PIL import Image
+import numpy as np
+
+app = Flask(__name__)
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+
+# Set the Tesseract OCR path (Modify if necessary)
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+# Database Connection
+DB_PATH = "devices.db"
+
+def create_db():
+    """Create the database and table if not exists."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS serial_numbers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            serial_number TEXT UNIQUE NOT NULL,
+            device_exists BOOLEAN NOT NULL,
+            primary_user TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+create_db()  # Ensure the DB and table exist
+
+def get_serial_data(serial_number):
+    """Fetch serial number details from the database."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT device_exists, primary_user FROM serial_numbers WHERE serial_number = ?", (serial_number,))
+    result = cursor.fetchone()
+    conn.close()
+    return result  # Returns (device_exists, primary_user) or None if not found
+
+def get_all_serial_numbers():
+    """Fetch all serial numbers for fuzzy matching."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT serial_number FROM serial_numbers")
+    serial_numbers = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return serial_numbers
+
+def get_closest_match(serial_number):
+    """Find the closest match from the database using fuzzy matching."""
+    all_serials = get_all_serial_numbers()
+    if not all_serials:
+        return None
+    best_match, score = process.extractOne(serial_number, all_serials)
+    return best_match if score > 60 else None  # If confidence score > 60%, return best match
+
+def preprocess_image(image_path):
+    """Preprocess the image to improve OCR accuracy."""
+    image = cv2.imread(image_path)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+    gray = cv2.fastNlMeansDenoising(gray, None, 30, 7, 21)  # Denoise
+    return gray
+
+@app.route("/")
+def index():
+    return '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Serial Number Checker</title>
+    </head>
+    <body>
+        <h2>Enter Serial Number</h2>
+        <form action="/check" method="post">
+            <label for="serial_number">Serial Number:</label>
+            <input type="text" id="serial_number" name="serial_number" required>
+            <button type="submit">Check</button>
+        </form>
+
+        <h2>Or Upload an Image</h2>
+        <form action="/upload" method="post" enctype="multipart/form-data">
+            <input type="file" name="image" accept="image/*" required>
+            <button type="submit">Extract & Check</button>
+        </form>
+    </body>
+    </html>
+    '''
+
+@app.route("/check", methods=["POST"])
+def check_serial_number():
+    serial_number = request.form.get("serial_number")
+
+    if not serial_number:
+        return jsonify({"error": "Serial number is missing."}), 400
+
+    serial_number = serial_number.strip().upper()
+    result = get_serial_data(serial_number)
+
+    if result:
+        device_exists, primary_user = result
+        message = f"Device Found! Primary User: {primary_user}" if device_exists else "Device Not Found in Azure AD."
+    else:
+        closest_match = get_closest_match(serial_number)
+        if closest_match:
+            result = get_serial_data(closest_match)
+            device_exists, primary_user = result
+            message = f"Did you mean '{closest_match}'? Device Found! Primary User: {primary_user}" if device_exists else f"Did you mean '{closest_match}'? Device Not Found."
+        else:
+            message = "Serial Number not recognized in the system."
+
+    return jsonify({"Serial Number": serial_number, "Message": message})
+
+@app.route("/upload", methods=["POST"])
+def upload_image():
+    if "image" not in request.files:
+        return jsonify({"error": "No image uploaded."}), 400
+
+    image = request.files["image"]
+    if image.filename == "":
+        return jsonify({"error": "No selected file."}), 400
+
+    filepath = os.path.join(app.config["UPLOAD_FOLDER"], image.filename)
+    image.save(filepath)
+
+    # Preprocess and extract text
+    processed_image = preprocess_image(filepath)
+    extracted_text = pytesseract.image_to_string(processed_image, config="--psm 7").strip().upper()
+
+    if not extracted_text:
+        return jsonify({"error": "No text detected in image."}), 400
+
+    return check_serial_number_from_text(extracted_text)
+
+def check_serial_number_from_text(serial_number):
+    serial_number = serial_number.strip().upper()
+    result = get_serial_data(serial_number)
+
+    if result:
+        device_exists, primary_user = result
+        message = f"Device Found! Primary User: {primary_user}" if device_exists else "Device Not Found in Azure AD."
+    else:
+        closest_match = get_closest_match(serial_number)
+        if closest_match:
+            result = get_serial_data(closest_match)
+            device_exists, primary_user = result
+            message = f"Did you mean '{closest_match}'? Device Found! Primary User: {primary_user}" if device_exists else f"Did you mean '{closest_match}'? Device Not Found."
+        else:
+            message = "Serial Number not recognized in the system."
+
+    return jsonify({"Extracted Serial Number": serial_number, "Message": message})
+
+if __name__ == "__main__":
+    print("Starting Flask server... Visit http://127.0.0.1:5000/")
+    app.run(debug=True)

@@ -1,0 +1,30 @@
+import sqlite3
+import pandas as pd
+import numpy as np
+import joblib
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.neighbors import KNeighborsClassifier
+
+# Connect to SQLite Database
+conn = sqlite3.connect("devices.db")
+cursor = conn.cursor()
+
+# Fetch serial numbers
+cursor.execute("SELECT serial_number FROM serial_numbers")
+data = cursor.fetchall()
+serial_numbers = [row[0] for row in data]
+
+# Convert Serial Numbers to Features
+vectorizer = TfidfVectorizer(analyzer="char", ngram_range=(2, 4))
+X = vectorizer.fit_transform(serial_numbers)
+y = np.arange(len(serial_numbers))  # Assign index as label
+
+# Train KNN Model
+model = KNeighborsClassifier(n_neighbors=3, metric="cosine")
+model.fit(X, y)
+
+# Save Model & Vectorizer
+joblib.dump(model, "serial_number_model.pkl")
+joblib.dump(vectorizer, "vectorizer.pkl")
+
+print("✅ Model Training Complete! Saved as serial_number_model.pkl")
