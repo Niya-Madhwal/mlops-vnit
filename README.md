@@ -1,2 +1,2 @@
-# mlops-vnit
-repo of mlops course
+# Gradient_Gladiators
+ML_Deployment assignment

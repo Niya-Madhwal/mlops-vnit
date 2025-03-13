@@ -1,27 +1,30 @@
-from sklearn.datasets import load_iris
-from sklearn.model_selection import train_test_split
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.metrics import accuracy_score
-import pandas as pd
+import uvicorn
+from fastapi import FastAPI
+from pydantic import BaseModel
+import pickle
+from sklearn.feature_extraction.text import TfidfVectorizer
+app = FastAPI()
 
-iris = load_iris()
-data = pd.DataFrame(data=iris.data, columns=iris.feature_names)
-data['target'] = iris.target
+# Load Model
+try:
+    model = pickle.load("./model/spam_model.0.1.0.pkl")
+    print("Model Loaded Successfully!")
+except Exception as e:
+    print(f"Error Loading Model: {e}")
 
-X= iris.data
-y=iris.target
+# Input Schema
+class EmailInput(BaseModel):
+    text: str
 
-X_train, X_test, y_train, y_test =train_test_split(X, y,test_size=0.6, random_state=42)
+@app.get("/")
+def home():
+    return {"message": "Spam Classification API is Running!"}
 
-clf= DecisionTreeClassifier(random_state=42)
-clf.fit(X_train, y_train)
-y_pred = clf.predict(X_test)
+@app.post("/predict")
+def predict_spam(email: EmailInput):
+    prediction = model.predict([email.text])[0]
+    return {"spam": bool(prediction)}
 
-accuracy = accuracy_score(y_test, y_pred)
-
-from sklearn.tree import plot_tree
-import matplotlib.pyplot as plt 
-plt.figure(figsize = (12,8))
-plot_tree(clf, feature_names=iris.feature_names, class_names=iris.target_names, filled=True)
-plt.title("DC MLOPS")
-plt.show()
+if __name__ == "__main__":
+    print("Running FastAPI server")
+    uvicorn.run(app, host="0.0.0.0", port=8001, reload=True)
